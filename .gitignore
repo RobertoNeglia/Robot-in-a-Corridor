@@ -1,0 +1,5 @@
+**/temp_frames/
+
+# cpython cache
+__pycache__/
+*.py[cod]
