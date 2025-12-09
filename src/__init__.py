@@ -2,7 +2,7 @@
 Robot-in-a-Corridor: A reinforcement learning project for corridor navigation.
 """
 
-from .environment import Corridor
+from .environment import Corridor, Maze, Rooms, GridWorld, BaseEnvironment
 from .agent import (
     Agent,  # Legacy alias for MonteCarloAgent
     MonteCarloAgent,
@@ -20,6 +20,10 @@ from .visualization import (
 
 __all__ = [
     "Corridor",
+    "Maze",
+    "Rooms",
+    "GridWorld",
+    "BaseEnvironment",
     "Agent",
     "MonteCarloAgent",
     "QLearningAgent",
