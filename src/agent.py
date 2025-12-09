@@ -5,11 +5,17 @@ Agent classes implementing various reinforcement learning algorithms with PyTorc
 import numpy as np
 import torch
 import torch.nn as nn
+import pickle
+import os
 from .utils import ORIENTATION, ACTIONS, TAKE_A_STEP, MOVE
 
 
 # Check for GPU availability
-device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device(
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available() else "cpu"
+)
 print(f"Using device: {device}")
 
 
@@ -21,23 +27,23 @@ INDEX_TO_ACTION = {idx: action for action, idx in ACTION_TO_INDEX.items()}
 def state_to_index(state, env):
     """
     Convert state tuple to unique index for tensor operations.
-    
+
     Args:
         state: (y, x, orientation) tuple
         env: Environment instance
-        
+
     Returns:
         Unique integer index for the state
     """
     y, x, orientation = state
     height = env.corridor.shape[0] - 2  # Exclude walls
-    width = env.corridor.shape[1] - 1   # Exclude left wall
-    
+    width = env.corridor.shape[1] - 1  # Exclude left wall
+
     # Map to indices starting from 0
     y_idx = y - 1
     x_idx = x - 1
     ori_idx = orientation.value
-    
+
     # Flatten to single index
     return y_idx * (width * 4) + x_idx * 4 + ori_idx
 
@@ -45,7 +51,7 @@ def state_to_index(state, env):
 def get_state_space_size(env):
     """Get total number of possible states."""
     height = env.corridor.shape[0] - 2  # Exclude walls
-    width = env.corridor.shape[1] - 1   # Exclude left wall
+    width = env.corridor.shape[1] - 1  # Exclude left wall
     n_orientations = 4
     return height * width * n_orientations
 
@@ -119,6 +125,24 @@ class BaseAgent:
         """
         self.epsilon = self.epsilon * decay_rate
 
+    def save(self, filepath):
+        """
+        Save the agent's learned parameters to disk.
+
+        Args:
+            filepath: Path to save the agent (without extension)
+        """
+        raise NotImplementedError("Must be implemented by subclass")
+
+    def load(self, filepath):
+        """
+        Load the agent's learned parameters from disk.
+
+        Args:
+            filepath: Path to load the agent from (without extension)
+        """
+        raise NotImplementedError("Must be implemented by subclass")
+
 
 class MonteCarloAgent(BaseAgent):
     """
@@ -136,11 +160,13 @@ class MonteCarloAgent(BaseAgent):
             epsilon: Exploration rate (0: greedy, 1: random)
         """
         super().__init__(env, gamma, alpha, epsilon)
-        
+
         # Value function as PyTorch tensor
         n_states = get_state_space_size(env)
-        self.V = torch.rand(n_states, device=self.device, dtype=torch.float32) * 0.99 + 0.01
-        
+        self.V = (
+            torch.rand(n_states, device=self.device, dtype=torch.float32) * 0.99 + 0.01
+        )
+
         # History
         self.trajectory = []
 
@@ -156,8 +182,8 @@ class MonteCarloAgent(BaseAgent):
             Best action for the given state
         """
         best_action = None
-        best_value = float('-inf')
-        
+        best_value = float("-inf")
+
         # Compute the value of each action and return the best one
         for action in allowed_actions:
             y, x, orientation = state
@@ -168,14 +194,14 @@ class MonteCarloAgent(BaseAgent):
             else:
                 y += TAKE_A_STEP[orientation][0] * MOVE[action.name]
                 x += TAKE_A_STEP[orientation][1] * MOVE[action.name]
-            
+
             next_state_idx = state_to_index((y, x, orientation), self.env)
             value = self.V[next_state_idx].item()
-            
+
             if value > best_value:
                 best_value = value
                 best_action = action
-                
+
         return best_action
 
     def update_trajectory(self, state, reward):
@@ -197,32 +223,78 @@ class MonteCarloAgent(BaseAgent):
         g = 0
         states_visited = []
         returns = []
-        
+
         # Calculate returns for each state
         for state, reward in reversed(self.trajectory):
             g = self.gamma * g + reward
             states_visited.append(state_to_index(state, self.env))
             returns.append(g)
-        
+
         # Reverse to get chronological order
         states_visited.reverse()
         returns.reverse()
-        
+
         # Batch update using PyTorch
         if states_visited:
-            state_indices = torch.tensor(states_visited, device=self.device, dtype=torch.long)
-            returns_tensor = torch.tensor(returns, device=self.device, dtype=torch.float32)
-            
+            state_indices = torch.tensor(
+                states_visited, device=self.device, dtype=torch.long
+            )
+            returns_tensor = torch.tensor(
+                returns, device=self.device, dtype=torch.float32
+            )
+
             # TD error
             td_errors = returns_tensor - self.V[state_indices]
-            
+
             # Update values
             self.V[state_indices] += self.alpha * td_errors
-        
+
         # Reset the history
         self.trajectory = []
         self.reset_episode()
         self.decay_epsilon()
+
+    def save(self, filepath):
+        """
+        Save the agent's learned value function to disk.
+
+        Args:
+            filepath: Path to save the agent (without extension)
+        """
+        save_dict = {
+            "V": self.V.cpu(),  # Move to CPU for saving
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "epsilon": self.epsilon,
+            "agent_type": "MonteCarloAgent",
+        }
+        torch.save(save_dict, f"{filepath}.pt")
+        print(f"MonteCarloAgent saved to {filepath}.pt")
+
+    def load(self, filepath):
+        """
+        Load the agent's learned value function from disk.
+
+        Args:
+            filepath: Path to load the agent from (without extension)
+        """
+        if not os.path.exists(f"{filepath}.pt"):
+            raise FileNotFoundError(f"No saved agent found at {filepath}.pt")
+
+        save_dict = torch.load(
+            f"{filepath}.pt", map_location=self.device, weights_only=False
+        )
+
+        if save_dict["agent_type"] != "MonteCarloAgent":
+            raise ValueError(
+                f"Saved agent type '{save_dict['agent_type']}' does not match MonteCarloAgent"
+            )
+
+        self.V = save_dict["V"].to(self.device)
+        self.gamma = save_dict["gamma"]
+        self.alpha = save_dict["alpha"]
+        self.epsilon = save_dict["epsilon"]
+        print(f"MonteCarloAgent loaded from {filepath}.pt")
 
 
 class QLearningAgent(BaseAgent):
@@ -241,11 +313,13 @@ class QLearningAgent(BaseAgent):
             epsilon: Exploration rate
         """
         super().__init__(env, gamma, alpha, epsilon)
-        
+
         # Q-function as PyTorch tensor [n_states, n_actions]
         n_states = get_state_space_size(env)
         n_actions = len(ACTIONS)
-        self.Q = torch.zeros(n_states, n_actions, device=self.device, dtype=torch.float32)
+        self.Q = torch.zeros(
+            n_states, n_actions, device=self.device, dtype=torch.float32
+        )
         self.default_q = 0.0
 
     def greedy_action(self, state, allowed_actions):
@@ -260,14 +334,14 @@ class QLearningAgent(BaseAgent):
             Action with highest Q-value
         """
         state_idx = state_to_index(state, self.env)
-        
+
         # Get Q-values for allowed actions
         q_values = []
         for action in allowed_actions:
             action_idx = ACTION_TO_INDEX[action]
             q_val = self.Q[state_idx, action_idx].item()
             q_values.append(q_val)
-        
+
         max_q = max(q_values)
         # Handle ties by random selection
         best_actions = [
@@ -290,21 +364,66 @@ class QLearningAgent(BaseAgent):
 
         state_idx = state_to_index(state, self.env)
         action_idx = ACTION_TO_INDEX[action]
-        
+
         # Q-Learning: off-policy update using max Q-value of next state
         if self.env.is_terminal():
             max_next_q = 0.0
         else:
             next_state_idx = state_to_index(next_state, self.env)
             next_allowed = self.env.get_allowed_actions(next_state)
-            next_action_indices = torch.tensor([ACTION_TO_INDEX[a] for a in next_allowed], 
-                                              device=self.device, dtype=torch.long)
+            next_action_indices = torch.tensor(
+                [ACTION_TO_INDEX[a] for a in next_allowed],
+                device=self.device,
+                dtype=torch.long,
+            )
             max_next_q = self.Q[next_state_idx, next_action_indices].max().item()
 
         # Q-Learning update using PyTorch
         current_q = self.Q[state_idx, action_idx]
         target = reward + self.gamma * max_next_q
         self.Q[state_idx, action_idx] = current_q + self.alpha * (target - current_q)
+
+    def save(self, filepath):
+        """
+        Save the agent's learned Q-table to disk.
+
+        Args:
+            filepath: Path to save the agent (without extension)
+        """
+        save_dict = {
+            "Q": self.Q.cpu(),  # Move to CPU for saving
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "epsilon": self.epsilon,
+            "agent_type": "QLearningAgent",
+        }
+        torch.save(save_dict, f"{filepath}.pt")
+        print(f"QLearningAgent saved to {filepath}.pt")
+
+    def load(self, filepath):
+        """
+        Load the agent's learned Q-table from disk.
+
+        Args:
+            filepath: Path to load the agent from (without extension)
+        """
+        if not os.path.exists(f"{filepath}.pt"):
+            raise FileNotFoundError(f"No saved agent found at {filepath}.pt")
+
+        save_dict = torch.load(
+            f"{filepath}.pt", map_location=self.device, weights_only=False
+        )
+
+        if save_dict["agent_type"] != "QLearningAgent":
+            raise ValueError(
+                f"Saved agent type '{save_dict['agent_type']}' does not match QLearningAgent"
+            )
+
+        self.Q = save_dict["Q"].to(self.device)
+        self.gamma = save_dict["gamma"]
+        self.alpha = save_dict["alpha"]
+        self.epsilon = save_dict["epsilon"]
+        print(f"QLearningAgent loaded from {filepath}.pt")
 
 
 class SARSAAgent(BaseAgent):
@@ -323,11 +442,13 @@ class SARSAAgent(BaseAgent):
             epsilon: Exploration rate
         """
         super().__init__(env, gamma, alpha, epsilon)
-        
+
         # Q-function as PyTorch tensor
         n_states = get_state_space_size(env)
         n_actions = len(ACTIONS)
-        self.Q = torch.zeros(n_states, n_actions, device=self.device, dtype=torch.float32)
+        self.Q = torch.zeros(
+            n_states, n_actions, device=self.device, dtype=torch.float32
+        )
         self.default_q = 0.0
 
     def greedy_action(self, state, allowed_actions):
@@ -342,12 +463,12 @@ class SARSAAgent(BaseAgent):
             Action with highest Q-value
         """
         state_idx = state_to_index(state, self.env)
-        
+
         q_values = []
         for action in allowed_actions:
             q_val = self.Q[state_idx, ACTION_TO_INDEX[action]].item()
             q_values.append(q_val)
-        
+
         max_q = max(q_values)
         best_actions = [
             action for action, q in zip(allowed_actions, q_values) if q == max_q
@@ -370,7 +491,7 @@ class SARSAAgent(BaseAgent):
 
         state_idx = state_to_index(state, self.env)
         action_idx = ACTION_TO_INDEX[action]
-        
+
         # SARSA: on-policy update using Q-value of next state-action pair
         if self.env.is_terminal():
             next_q = 0.0
@@ -383,6 +504,48 @@ class SARSAAgent(BaseAgent):
         current_q = self.Q[state_idx, action_idx]
         target = reward + self.gamma * next_q
         self.Q[state_idx, action_idx] = current_q + self.alpha * (target - current_q)
+
+    def save(self, filepath):
+        """
+        Save the agent's learned Q-table to disk.
+
+        Args:
+            filepath: Path to save the agent (without extension)
+        """
+        save_dict = {
+            "Q": self.Q.cpu(),  # Move to CPU for saving
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "epsilon": self.epsilon,
+            "agent_type": "SARSAAgent",
+        }
+        torch.save(save_dict, f"{filepath}.pt")
+        print(f"SARSAAgent saved to {filepath}.pt")
+
+    def load(self, filepath):
+        """
+        Load the agent's learned Q-table from disk.
+
+        Args:
+            filepath: Path to load the agent from (without extension)
+        """
+        if not os.path.exists(f"{filepath}.pt"):
+            raise FileNotFoundError(f"No saved agent found at {filepath}.pt")
+
+        save_dict = torch.load(
+            f"{filepath}.pt", map_location=self.device, weights_only=False
+        )
+
+        if save_dict["agent_type"] != "SARSAAgent":
+            raise ValueError(
+                f"Saved agent type '{save_dict['agent_type']}' does not match SARSAAgent"
+            )
+
+        self.Q = save_dict["Q"].to(self.device)
+        self.gamma = save_dict["gamma"]
+        self.alpha = save_dict["alpha"]
+        self.epsilon = save_dict["epsilon"]
+        print(f"SARSAAgent loaded from {filepath}.pt")
 
 
 class ExpectedSARSAAgent(BaseAgent):
@@ -401,11 +564,13 @@ class ExpectedSARSAAgent(BaseAgent):
             epsilon: Exploration rate
         """
         super().__init__(env, gamma, alpha, epsilon)
-        
+
         # Q-function as PyTorch tensor
         n_states = get_state_space_size(env)
         n_actions = len(ACTIONS)
-        self.Q = torch.zeros(n_states, n_actions, device=self.device, dtype=torch.float32)
+        self.Q = torch.zeros(
+            n_states, n_actions, device=self.device, dtype=torch.float32
+        )
         self.default_q = 0.0
 
     def greedy_action(self, state, allowed_actions):
@@ -420,12 +585,12 @@ class ExpectedSARSAAgent(BaseAgent):
             Action with highest Q-value
         """
         state_idx = state_to_index(state, self.env)
-        
+
         q_values = []
         for action in allowed_actions:
             q_val = self.Q[state_idx, ACTION_TO_INDEX[action]].item()
             q_values.append(q_val)
-        
+
         max_q = max(q_values)
         best_actions = [
             action for action, q in zip(allowed_actions, q_values) if q == max_q
@@ -447,22 +612,22 @@ class ExpectedSARSAAgent(BaseAgent):
 
         state_idx = state_to_index(state, self.env)
         action_idx = ACTION_TO_INDEX[action]
-        
+
         # Expected SARSA: use expected value over all next actions
         if self.env.is_terminal():
             expected_next_q = 0.0
         else:
             next_state_idx = state_to_index(next_state, self.env)
             next_allowed = self.env.get_allowed_actions(next_state)
-            
+
             # Get Q-values for all allowed actions using PyTorch
             next_action_indices = [ACTION_TO_INDEX[a] for a in next_allowed]
             q_values_tensor = self.Q[next_state_idx, next_action_indices]
-            
+
             # Calculate expected value under epsilon-greedy policy
             max_q = q_values_tensor.max().item()
             n_actions = len(next_allowed)
-            
+
             expected_next_q = 0.0
             for i, action in enumerate(next_allowed):
                 q_val = q_values_tensor[i].item()
@@ -478,6 +643,48 @@ class ExpectedSARSAAgent(BaseAgent):
         current_q = self.Q[state_idx, action_idx]
         target = reward + self.gamma * expected_next_q
         self.Q[state_idx, action_idx] = current_q + self.alpha * (target - current_q)
+
+    def save(self, filepath):
+        """
+        Save the agent's learned Q-table to disk.
+
+        Args:
+            filepath: Path to save the agent (without extension)
+        """
+        save_dict = {
+            "Q": self.Q.cpu(),  # Move to CPU for saving
+            "gamma": self.gamma,
+            "alpha": self.alpha,
+            "epsilon": self.epsilon,
+            "agent_type": "ExpectedSARSAAgent",
+        }
+        torch.save(save_dict, f"{filepath}.pt")
+        print(f"ExpectedSARSAAgent saved to {filepath}.pt")
+
+    def load(self, filepath):
+        """
+        Load the agent's learned Q-table from disk.
+
+        Args:
+            filepath: Path to load the agent from (without extension)
+        """
+        if not os.path.exists(f"{filepath}.pt"):
+            raise FileNotFoundError(f"No saved agent found at {filepath}.pt")
+
+        save_dict = torch.load(
+            f"{filepath}.pt", map_location=self.device, weights_only=False
+        )
+
+        if save_dict["agent_type"] != "ExpectedSARSAAgent":
+            raise ValueError(
+                f"Saved agent type '{save_dict['agent_type']}' does not match ExpectedSARSAAgent"
+            )
+
+        self.Q = save_dict["Q"].to(self.device)
+        self.gamma = save_dict["gamma"]
+        self.alpha = save_dict["alpha"]
+        self.epsilon = save_dict["epsilon"]
+        print(f"ExpectedSARSAAgent loaded from {filepath}.pt")
 
 
 # Legacy alias for backwards compatibility
