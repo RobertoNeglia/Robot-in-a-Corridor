@@ -12,6 +12,11 @@ from .agent import (
 )
 from .utils import ORIENTATION, ACTIONS
 from .training import train_monte_carlo, train_td_learning, compare_algorithms
+from .visualization import (
+    visualize_training_progress,
+    visualize_training_progress_overlay,
+    visualize_training_progress_animated_overlay,
+)
 
 __all__ = [
     "Corridor",
@@ -25,4 +30,7 @@ __all__ = [
     "train_monte_carlo",
     "train_td_learning",
     "compare_algorithms",
+    "visualize_training_progress",
+    "visualize_training_progress_overlay",
+    "visualize_training_progress_animated_overlay",
 ]

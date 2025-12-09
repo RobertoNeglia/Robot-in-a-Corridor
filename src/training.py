@@ -118,13 +118,16 @@ def train_td_learning(env, agent, n_epochs=1000, max_steps=500, display_interval
     return steps_history, reward_history
 
 
-def compare_algorithms(env_config, algorithms, n_epochs=1000, max_steps=500, n_runs=5):
+def compare_algorithms(
+    env_config, algorithms, agent_config, n_epochs=1000, max_steps=500, n_runs=5
+):
     """
     Compare multiple RL algorithms on the same environment.
 
     Args:
         env_config: Dictionary with environment configuration (e.g., {'length': 100, 'width': 5})
         algorithms: Dictionary mapping algorithm names to agent classes
+        agent_config: Dictionary mapping algorithm names to their specific parameters
         n_epochs: Number of training episodes per run
         max_steps: Maximum steps per episode
         n_runs: Number of independent runs for each algorithm
@@ -146,7 +149,7 @@ def compare_algorithms(env_config, algorithms, n_epochs=1000, max_steps=500, n_r
         for run in range(n_runs):
             # Create fresh environment and agent
             env = Corridor(**env_config)
-            agent = AgentClass(env)
+            agent = AgentClass(env, **agent_config.get(algo_name, {}))
 
             # Train
             if isinstance(agent, MonteCarloAgent):
